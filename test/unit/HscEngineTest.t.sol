@@ -1,39 +1,39 @@
-// SPDX-License-Identifier: SEE LICENSE IN LICENSE
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 import {Test} from "forge-std/Test.sol";
 import {HSCEngine} from "../../src/HSCEngine.sol";
 import {HuzaifaStableCoin} from "../../src/HuzaifaStableCoin.sol";
-import {DeployHsc} from "../../script/DeployHsc.s.sol";
+import {DeployHSC} from "../../script/DeployHSC.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 
 contract HscEngineTest is Test {
 
     HuzaifaStableCoin hsc;
     HSCEngine engine;
-    HelperConfig helperConfig;
+    HelperConfig config;
 
     address ethUsdPriceFeed;
     address weth;
 
-    function setuo() public {
-        DeployHsc deployer = new DeployHsc();
-        deployer.run();
+    function setUp() public {
+        DeployHSC deployer = new DeployHSC();
+        (hsc, engine, config) = deployer.run();
 
-        (ethUsdPriceFeed,,weth,,) = helperConfig.activeNetworkConfig();
+        (ethUsdPriceFeed,,weth,,) = config.activeNetworkConfig();
     }
 
 
-    /////////////////////////
+    /////////////////////////  
     // Price Test          //
     /////////////////////////
 
     function testGetUsdValue() public {
         uint256 ethAmount = 15e18;
-        uint256 expectedUsd = 3000e18;
-        uint256 actualUsd = engine.getUsdValue(weth, ethAmount);
-        assertEq(expectedUsd, actualUsd);
+        // 15e18 ETH * $2000/ETH = $30,000e18
+        uint256 expectedUsd = 30000e18;
+        uint256 usdValue = engine.getUsdValue(weth, ethAmount);
+        assertEq(expectedUsd, usdValue);
     }
-
 
 }

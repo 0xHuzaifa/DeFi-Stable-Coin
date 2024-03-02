@@ -27,6 +27,7 @@ import {HuzaifaStableCoin} from "./HuzaifaStableCoin.sol";
 import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {AggregatorV3Interface} from "../lib/foundry-chainlink-toolkit/src/interfaces/feeds/AggregatorV3Interface.sol";
+
 /*
  * @title HSCEngine
  * @author Huzaifa Ahmed
@@ -66,14 +67,14 @@ contract HSCEngine is ReentrancyGuard {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% Over Collateralized
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MINI_HEALTH_FACTOR = 1;
+    uint256 private constant MIN_HEALTH_FACTOR = 1;
 
     /// @dev Mapping of token address to price feed address
     mapping (address token => address priceFeed) private s_priceFeeds;
     /// @dev Amount of collateral deposited by user
     mapping (address user => mapping (address token => uint256 amount)) private s_collateralDeposited;
     /// @dev Amount of hsc minted by user
-    mapping (address user => uint256 amountHscMinted) private s_HscMinted;
+    mapping (address user => uint256 amountHscMinted) private s_HSCMinted;
 
 
     /// @dev If we know exactly how many tokens we have, we could make this immutable!
@@ -156,8 +157,10 @@ contract HSCEngine is ReentrancyGuard {
     * @param amountHscToMinted The amount of Huzaifa stable coin to minted
     * @notice they must have more collateral value than the minimum threeshold. 
     */
-    function mintDsc(uint256 amountHscToMinted) external {
-        s_HscMinted[msg.sender] += amountHscToMinted;
+    function mintDsc(uint256 amountHscToMinted) external moreThanZero(amountHscToMinted) nonReentrant {
+        s_HSCMinted[msg.sender] += amountHscToMinted;
+        // If they minted too much ($150 HSC, $100 ETH)
+        _revertIfHealthFactorIsBroken(msg.sender);
         bool minted = i_hsc.mint(msg.sender, amountHscToMinted);
         if (!minted) {
             revert HSCEngine__MintedFailed();
@@ -170,16 +173,16 @@ contract HSCEngine is ReentrancyGuard {
 
     function getHealthFactor() external {}
 
-    /////////////////////////////////////
-    // Private & Internal Functions    //
-    /////////////////////////////////////
+    //////////////////////////////////////////
+    // Private & Internal View Functions    //
+    //////////////////////////////////////////
 
     // checking if the minted to much ($150 HSC, $100 ETH)
     function _revertIfHealthFactorIsBroken(address user) internal view {
-        // 1. Check health factor (do they have enough collateral)
+        // 1. Check health factor (do they have enough collateral?)
         // 2. Revert if they don't
         uint256 userHealthFactor = _healthFactor(user);
-        if (userHealthFactor > MINI_HEALTH_FACTOR) {
+        if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert HSCEngine__BreakHealthFactor(userHealthFactor);
         }
     }
@@ -190,25 +193,24 @@ contract HSCEngine is ReentrancyGuard {
 
     /*
     * Retrun how close to liquidate a user is
-    * If a user gose below
-    *  1. They can get liquidated
+    * If a user gose below 1, They can get liquidated
     */ 
-    function _healthFactor(address user) internal view returns(uint256) {
+    function _healthFactor(address user) private view returns(uint256) {
         // Total Hsc minted
         // Total collateral value
         (uint256 totalHscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
 
         // It's essentially determining the minimum value of collateral required to avoid liquidation.
-        uint256 collateralAdjustedForThreshold = collateralValueInUsd * LIQUIDATION_THRESHOLD / LIQUIDATION_PRECISION;
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
 
         // This indicates how much collateral the user has relative to the stablecoins they've minted. 
         // Higher values indicate a safer position.
-        return collateralAdjustedForThreshold * PRECISION / totalHscMinted;
+        return (collateralAdjustedForThreshold * PRECISION) / totalHscMinted;
     }
 
     function _getAccountInformation(address user) 
     private view returns(uint256 totalHscMinted, uint256 collateralValueInUsd) {
-        totalHscMinted = s_HscMinted[user];
+        totalHscMinted = s_HSCMinted[user];
         collateralValueInUsd = getAccountCollateralValue(user);
     }
 
@@ -217,13 +219,11 @@ contract HSCEngine is ReentrancyGuard {
     // Public & External View & Pure Functions     //
     /////////////////////////////////////////////////
 
-    function getAccountCollateralValue(address user) 
-    public view returns(uint256 totalCollateralValueInUsd) {
-        // loop thorough each collateral tokens 
-        // get the amount they have deposited 
+    function getAccountCollateralValue(address user) public view returns(uint256 totalCollateralValueInUsd) {
+        // loop thorough each collateral tokens get the amount they have deposited 
         // and map it to the price, to get the Usd value
 
-        for (uint i = 0; i < s_collateralTokens.length; i++) {
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
             address token = s_collateralTokens[i];
             uint256 amount = s_collateralDeposited[user][token];
             totalCollateralValueInUsd += getUsdValue(token, amount);
@@ -242,6 +242,6 @@ contract HSCEngine is ReentrancyGuard {
         // The returned value from Chainlink will be 1000 * 1e8
         // Most USD pairs have 8 decimals, so we will just pretend they all do
         // We want to have everything in terms of WEI, so we add 10 zeros at the end
-        return (uint256(price) * ADITIONAL_FEED_PRECISION * amount) / PRECISION;
+        return ((uint256(price) * ADITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
 }

@@ -2,16 +2,14 @@
 pragma solidity ^0.8.19;
 
 import {Script} from "forge-std/Script.sol";
-import {HuzaifaStableCoin} from "../src/HuzaifaStableCoin.sol";
-import {HSCEngine} from "../src/HSCEngine.sol";
 import {MockV3Aggregator} from "../test/mock/MockV3Aggregator.sol";
 import {ERC20Mock} from "../lib/openzeppelin-contracts/contracts/mocks/token/ERC20Mock.sol";
 
 contract HelperConfig is Script {
    
    struct NetworkConfig {
-        address wethPriceFeedAddress;
-        address wbtcPriceFeedAddress;
+        address wethPriceFeed;
+        address wbtcPriceFeed;
         address weth;
         address wbtc;
         uint256 deployerKey;
@@ -35,8 +33,8 @@ contract HelperConfig is Script {
 
    function getSepoliaEthConfig() public view returns(NetworkConfig memory) {
         return NetworkConfig({
-            wethPriceFeedAddress: 0x694AA1769357215DE4FAC081bf1f309aDC325306, // ETH / USD
-            wbtcPriceFeedAddress: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43, // BTC / USD
+            wethPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306, // ETH / USD
+            wbtcPriceFeed: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43, // BTC / USD
             weth: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81,
             wbtc: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063,
             deployerKey: vm.envUint("PRIVATE_KEY")
@@ -45,7 +43,7 @@ contract HelperConfig is Script {
 
    function getOrCreateAnvilEthConfig() public returns(NetworkConfig memory) {
         // Check to see if we set an active network config
-        if(activeNetworkConfig.wethPriceFeedAddress != address(0)) {
+        if(activeNetworkConfig.wethPriceFeed != address(0)) {
             return activeNetworkConfig;
         }
 
@@ -64,8 +62,8 @@ contract HelperConfig is Script {
         vm.stopBroadcast();
 
         return NetworkConfig({
-            wethPriceFeedAddress: address(ethUsdPriceFeed),
-            wbtcPriceFeedAddress: address(btcUsdPriceFeed),
+            wethPriceFeed: address(ethUsdPriceFeed),
+            wbtcPriceFeed: address(btcUsdPriceFeed),
             weth: address(wethMock),
             wbtc: address(wbtcMock),
             deployerKey: DEFAULT_ANVIL_KEY

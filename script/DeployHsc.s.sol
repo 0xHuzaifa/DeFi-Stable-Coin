@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: SEE LICENSE IN LICENSE
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 import {Script} from "forge-std/Script.sol";
@@ -6,19 +6,19 @@ import {HuzaifaStableCoin} from "../src/HuzaifaStableCoin.sol";
 import {HSCEngine} from "../src/HSCEngine.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 
-contract DeployHsc is Script {
+contract DeployHSC is Script {
 
     address[] public tokenAddresses;
     address[] public priceFeedAddresses;
     
     function run() external returns(HuzaifaStableCoin, HSCEngine, HelperConfig) {
-        HelperConfig helperConfig = new HelperConfig(); // This comes with our mock
+        HelperConfig config = new HelperConfig(); // This comes with our mock
 
-        (address wethPriceFeedAddress, address wbtcPriceFeedAddress, address weth, address wbtc, uint256 deployerKey)
-            = helperConfig.activeNetworkConfig();
+        (address wethPriceFeed, address wbtcPriceFeed, address weth, address wbtc, 
+        uint256 deployerKey) = config.activeNetworkConfig();
 
         tokenAddresses = [weth, wbtc];
-        priceFeedAddresses = [wethPriceFeedAddress, wbtcPriceFeedAddress];
+        priceFeedAddresses = [wethPriceFeed, wbtcPriceFeed];
 
         vm.startBroadcast(deployerKey);
 
@@ -32,6 +32,6 @@ contract DeployHsc is Script {
 
         vm.stopBroadcast();
 
-        return (hsc, engine, helperConfig);
+        return (hsc, engine, config);
     }
 }
