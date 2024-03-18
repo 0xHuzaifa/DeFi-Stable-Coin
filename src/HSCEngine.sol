@@ -56,6 +56,8 @@ contract HSCEngine is ReentrancyGuard {
     error HSCEngine__TransferFailed();
     error HSCEngine__BreakHealthFactor(uint256 healthFactorValue);
     error HSCEngine__MintedFailed();
+    error HSC__HealthFactorOk();
+    error HSCEngine__HealthFactorNotImporved();
 
     //////////////////////////////
     // State Variables         ///
@@ -67,7 +69,8 @@ contract HSCEngine is ReentrancyGuard {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // 200% Over Collateralized
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 private constant LIQUIDATION_BONUS = 10;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
 
     /// @dev Mapping of token address to price feed address
     mapping (address token => address priceFeed) private s_priceFeeds;
@@ -86,7 +89,7 @@ contract HSCEngine is ReentrancyGuard {
     /////////////////////////
 
     event CollateralDeposited(address indexed user, address indexed token, uint256 indexed amount);
-    event CollateralRedeemed(address indexed user, address indexed token, uint256 indexed amount);
+    event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 indexed amount);
 
     /////////////////////////
     // Modifiers           //
@@ -137,7 +140,7 @@ contract HSCEngine is ReentrancyGuard {
     */
     function depositCollateralAndMintHsc(
         address tokenCollateralAddress, 
-        address amountCollateral, 
+        uint256 amountCollateral, 
         uint256 amountHscToMint) external {
             depostiCollateral(tokenCollateralAddress, amountCollateral);
             mintHsc(amountHscToMint);
@@ -178,14 +181,7 @@ contract HSCEngine is ReentrancyGuard {
      */
     function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral) 
     public moreThanZero(amountCollateral) nonReentrant isAllowdToken(tokenCollateralAddress){
-        s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
-        emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
-
-        bool success = IERC20(tokenCollateralAddress).transfer(msg.sender, amountCollateral);
-        if (!success) {
-            revert HSCEngine__TransferFailed();
-        }
-
+        _redeemCollateral(tokenCollateralAddress, amountCollateral, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender);
     }
     
@@ -206,18 +202,13 @@ contract HSCEngine is ReentrancyGuard {
 
 
     function burnHsc(uint256 amount) public moreThanZero(amount) {
-        s_HSCMinted[msg.sender] -= amount;
-
-        bool success = i_hsc.transferFrom(msg.sender, address(this).balance, amount);
-        if (!success) {
-            revert HSCEngine__TransferFailed();
-        }
-        i_hsc.burn(amount);
+        _burnHsc(amount, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender); // I don't think this would ever hit
     }
 
     /*
-     * @param collateral: The ERC20 token address of the collateral you're using to make the protocol solvent again.
+     * @param collateral: The ERC20 token address of the collateral you're usin
+     g to make the protocol solvent again.
      * This is collateral that you're going to take from the user who is insolvent.
      * In return, you have to burn your HSC to pay off their debt, but you don't pay off your own.
      * @param user: The user who is insolvent. They have to have a _healthFactor below MIN_HEALTH_FACTOR
@@ -231,7 +222,41 @@ contract HSCEngine is ReentrancyGuard {
      */
     function liquidate(address collateral, address user, uint256 debtToCover) 
     external moreThanZero(debtToCover) nonReentrant {
-        
+        // need to check the health factor of user
+        uint256 startingUserHealthFactor = _healthFactor(user);
+        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert HSC__HealthFactorOk();
+        }
+
+        // we want to burn their HSC "debt"
+        // and take their collateral
+        // Bad User: $140 ETH, $100 HSC
+        // Debt to cover = $100 
+        // $100 of HSC = ?? ETH?
+
+        // If covering 100 HSC, we need to $100 of collateral
+        uint256 tokenAmountFromDebtToCover = getTokenAmountFromUsd(collateral, debtToCover);
+
+        // And give them a 10% bonus
+        // So we are giving the liquidator $110 of WETH for 100 HSC
+        // We should implemment a feature to liquidate in the event the protocol is insolvent
+        // and swap extra amount into a treasurey
+
+        // 0.05 * 0.1 = 0.005, getting 0.055
+        uint256 bonusCollateral = (tokenAmountFromDebtToCover * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        uint256 totalCollateralToRedeem = tokenAmountFromDebtToCover + bonusCollateral;
+
+        _redeemCollateral(collateral, totalCollateralToRedeem, user, msg.sender);
+
+        // we need to burn hsc 
+        _burnHsc(debtToCover, user, msg.sender);
+
+        uint256 endingUserHealthFactor = _healthFactor(user);
+        if (endingUserHealthFactor <= startingUserHealthFactor) {
+            revert HSCEngine__HealthFactorNotImporved();
+        }
+
+        _revertIfHealthFactorIsBroken(msg.sender);
     }
     
     function getHealthFactor() external {}
@@ -241,18 +266,25 @@ contract HSCEngine is ReentrancyGuard {
     //////////////////////////////////////////
 
     // checking if the minted to much ($150 HSC, $100 ETH)
+    // 1. Check health factor (do they have enough collateral?)
+    // 2. Revert if they don't
     function _revertIfHealthFactorIsBroken(address user) internal view {
-        // 1. Check health factor (do they have enough collateral?)
-        // 2. Revert if they don't
         uint256 userHealthFactor = _healthFactor(user);
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert HSCEngine__BreakHealthFactor(userHealthFactor);
         }
     }
 
-    //////////////////////////////////////////
-    // Private & Internal view Functions    //
-    //////////////////////////////////////////
+    function _redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral, address from, address to) internal {
+        s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
+
+        bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
+        if (!success) {
+            revert HSCEngine__TransferFailed();
+        }
+
+    }
 
     /*
     * Retrun how close to liquidate a user is
@@ -277,6 +309,18 @@ contract HSCEngine is ReentrancyGuard {
         collateralValueInUsd = getAccountCollateralValue(user);
     }
 
+    /*
+    * @dev low-level internal function do not call unless the function calling. It is checking for health factor being broken
+    */
+    function _burnHsc(uint256 amountHscToBurn, address onBehalfOf, address hscFrom) private {
+         s_HSCMinted[onBehalfOf] -= amountHscToBurn;
+
+        bool success = i_hsc.transferFrom(hscFrom, address(this), amountHscToBurn);
+        if (!success) {
+            revert HSCEngine__TransferFailed();
+        }
+        i_hsc.burn(amountHscToBurn);
+    }
 
     /////////////////////////////////////////////////
     // Public & External View & Pure Functions     //
@@ -306,5 +350,19 @@ contract HSCEngine is ReentrancyGuard {
         // Most USD pairs have 8 decimals, so we will just pretend they all do
         // We want to have everything in terms of WEI, so we add 10 zeros at the end
         return ((uint256(price) * ADITIONAL_FEED_PRECISION) * amount) / PRECISION;
+    }
+
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
+        // price of ETH(token)
+        // $ / ETH ETH??
+        // $2000 / ETH. $1000 = 0.5 ETH
+
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int price,,,) = priceFeed.latestRoundData(); 
+
+        // 10e18 * 1e18 
+        // ($2000e8 * 1e10)
+
+        return ((usdAmountInWei * PRECISION) / (uint(price) * ADITIONAL_FEED_PRECISION));
     }
 }
